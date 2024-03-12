@@ -199,6 +199,9 @@ endif
 if STRLCPY_IMPL
 SYS_SRC += strlcpy.c
 endif
+if DEMIEVENT_BACKEND
+SYS_SRC += demi.c
+endif
 if SELECT_BACKEND
 SYS_SRC += select.c
 endif

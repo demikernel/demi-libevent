@@ -77,6 +77,9 @@
 #include "kqueue-internal.h"
 #endif
 
+#ifdef EVENT__HAVE_DEMIEVENT
+extern const struct eventop demieventops;
+#endif
 #ifdef EVENT__HAVE_EVENT_PORTS
 extern const struct eventop evportops;
 #endif
@@ -101,6 +104,9 @@ extern const struct eventop win32ops;
 
 /* Array of backends in order of preference. */
 static const struct eventop *eventops[] = {
+#ifdef EVENT__HAVE_DEMIEVENT
+	&demieventops,
+#endif
 #ifdef EVENT__HAVE_EVENT_PORTS
 	&evportops,
 #endif

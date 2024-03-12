@@ -131,6 +131,7 @@ dnl Checks for libraries.
 AC_SEARCH_LIBS([inet_ntoa], [nsl])
 AC_SEARCH_LIBS([socket], [socket])
 AC_SEARCH_LIBS([inet_aton], [resolv])
+AC_SEARCH_LIBS([demi_init], [demikernel])
 if test "x$enable_clock_gettime" = "xyes"; then
   AC_SEARCH_LIBS([clock_gettime], [rt])
   AC_CHECK_FUNCS([clock_gettime])
@@ -252,6 +253,9 @@ AC_CHECK_HEADERS([ \
   sys/random.h \
   errno.h \
   afunix.h \
+  demi/libos.h \
+  demi/sga.h \
+  demi/wait.h \
 ])
 
 case "${host_os}" in
@@ -649,6 +653,35 @@ epoll_create(int size)
 	fi
 fi
 AM_CONDITIONAL(EPOLL_BACKEND, [test "x$haveepoll" = "xyes"])
+
+havedemievent=no
+AC_CHECK_FUNCS(demi_init, [havedemievent=yes], )
+if test "x$havedemievent" = "xyes" ; then
+	AC_DEFINE(HAVE_DEMIEVENT, 1,
+		[Define if your system supports the demikernel])
+fi
+if test "x$ac_cv_header_demievent_h" = "xyes"; then
+	if test "x$havedemievent" = "xno" ; then
+		AC_MSG_CHECKING(for demievent calls)
+		AC_RUN_IFELSE(
+      [AC_LANG_PROGRAM([[
+        #include <demi/libos.h>
+      ]],[[
+        int res;
+        char *const args[2] = {"", "catnap"};
+        res = demi_init(2, (char **) argv);
+        return res;
+      ]])], 
+      [AC_MSG_RESULT(yes)
+      AC_DEFINE(HAVE_DEMIEVENT, 1,
+	      [Define if your system supports demievent calls])
+      LIBS="$LIBS -ldemikernel"
+      have_demievent=yes
+      ], [AC_MSG_RESULT(no)], [AC_MSG_RESULT(no)]
+    )
+	fi
+fi
+AM_CONDITIONAL(DEMIEVENT_BACKEND, [test "x$havedemievent" = "xyes"])
 
 haveeventports=no
 AC_CHECK_FUNCS(port_create, [haveeventports=yes], )
