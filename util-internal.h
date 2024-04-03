@@ -87,7 +87,7 @@ extern "C" {
 #endif
 
 /* A good no-op to use in macro definitions. */
-#define EVUTIL_NIL_STMT_ ((void)0)
+#define EVBASE_RELEASE_LOCKEVUTIL_NIL_STMT_ ((void)0)
 /* A no-op that tricks the compiler into thinking a condition is used while
  * definitely not making any code for it.  Used to compile out asserts while
  * avoiding "unused variable" warnings.  The "!" forces the compiler to
