@@ -654,6 +654,8 @@ epoll_create(int size)
 fi
 AM_CONDITIONAL(EPOLL_BACKEND, [test "x$haveepoll" = "xyes"])
 
+LIBS="$LIBS -ldl"
+
 havedemievent=no
 AC_CHECK_FUNCS(demi_init, [havedemievent=yes], )
 if test "x$havedemievent" = "xyes" ; then

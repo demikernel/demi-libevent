@@ -1,9 +1,10 @@
 // NOTE: libc requires this for RTLD_NEXT.
-// #define _GNU_SOURCE 1
+#define _GNU_SOURCE 1
 
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <dlfcn.h>
 #include <sys/epoll.h>
 #include <demi/libos.h>
 #include <demi/wait.h>
@@ -18,10 +19,11 @@
 #include "changelist-internal.h"
 
 #ifdef EVENT__HAVE_DEMIEVENT
-#define _POSIX_C_SOURCE 200809L
+// #define _POSIX_C_SOURCE 200809L
 
 #define EVENT_BASE_FLAG_DEMIEVENT_USE_CHANGELIST 1
 #define QTOKEN_MAX 65535
+#define MAX_EVENTS 30
 
 static void *
 demievent_init(struct event_base *base);
@@ -60,10 +62,21 @@ struct demivent {
 };
 
 struct demieventop {
-  /* Number of epoll events added */
+  /* Number of regular epoll events added */
   int n_epoll;
-  /* Epoll holding non demikernel events */
+  /* Epoll holding regular events */
   int epfd;
+
+  /* Number of demikernel epoll events */
+  int n_demi_epoll;
+  /* Epoll holding demikernel events*/
+  int demi_epfd;
+
+  /* Libc functions to be used with epoll */
+  int (*libc_epoll_create1)(int);
+  int (*libc_epoll_ctl)(int, int, int, struct epoll_event *);
+  int (*libc_epoll_wait)(int, struct epoll_event *, int, int);
+
 };
 
 static const struct eventop demieventops_changelist = {
@@ -104,12 +117,26 @@ demievent_init(struct event_base *base)
     return NULL;
   }
 
-  epfd = epoll_create1(0);
+  assert((demiop->libc_epoll_create1 = dlsym(RTLD_NEXT, "epoll_create1")) != NULL);
+  assert((demiop->libc_epoll_ctl = dlsym(RTLD_NEXT, "epoll_ctl")) != NULL);
+  assert((demiop->libc_epoll_wait = dlsym(RTLD_NEXT, "epoll_wait")) != NULL);
+
+  epfd = demiop->libc_epoll_create1(0);
   if (epfd == -1) {
-    fprintf(stderr, "demievent_init: epoll_create failed\n");
+    fprintf(stderr, "demievent_init: libc epoll_create failed\n");
     return NULL;
   }
   demiop->epfd = epfd;
+
+  epfd = epoll_create1(0);
+  if (epfd == -1) {
+    fprintf(stderr, "demievent_init: demikernel epoll_create failed\n");
+    return NULL;
+  }
+  demiop->demi_epfd = epfd;
+
+  demiop->n_epoll = 0;
+  demiop->n_demi_epoll = 0;
 
   // DEMIDO: Figure out if enabling changelist is better
   if (base->flags & EVENT_BASE_FLAG_DEMIEVENT_USE_CHANGELIST) {
@@ -133,22 +160,25 @@ static int
 demievent_nochangelist_add(struct event_base *base, evutil_socket_t fd,
     short old, short events, void *fdinfo)
 {
-  int ret;
   struct epoll_event event;
   struct demieventop *evbase;
 
+  fprintf(stderr, "demievent_add: fd=%d\n", fd);
   evbase = (struct demieventop *) base->evbase;
 
   event.events = EPOLLIN;
   event.data.fd = fd;
 
-  ret = epoll_ctl(evbase->epfd, EPOLL_CTL_ADD, fd, &event);
-
-  if (ret == -1 && errno != EEXIST) {
-    EINVAL;
-    fprintf(stderr, "nochangelist_add_epoll: failed to add event errno=%d\n", errno);
-    return -1;
+  if (fd < 500) {
+    evbase->libc_epoll_ctl(evbase->epfd, EPOLL_CTL_ADD, fd, &event);
+  } else {
+    epoll_ctl(evbase->demi_epfd, EPOLL_CTL_ADD, fd, &event);
   }
+
+  if (fd < 500)
+    evbase->n_epoll++;
+  else
+    evbase->n_demi_epoll++;
 
   return 0;
 }
@@ -165,20 +195,24 @@ static int
 demievent_nochangelist_del(struct event_base *base, evutil_socket_t fd,
     short old, short events, void *fdinfo)
 {
-  // int ret;
-  // struct demieventop *evbase;
-  fprintf(stderr, "nochangelist_del_epoll\n");
+  int ret;
+  struct demieventop *evbase;
+  fprintf(stderr, "demievent_del fd=%d\n", fd);
 
-  // evbase = (struct demieventop *) base->evbase;
+  evbase = (struct demieventop *) base->evbase;
 
-  // ret = epoll_ctl(evbase->epfd, EPOLL_CTL_DEL, fd, NULL);
+  if (fd < 500) {
+    ret = evbase->libc_epoll_ctl(evbase->epfd, EPOLL_CTL_DEL, fd, NULL);
+  } else {
+    ret = epoll_ctl(evbase->epfd, EPOLL_CTL_DEL, fd, NULL);
+  }
 
-  // if (ret == -1 && errno == EBADF) {
-  //   return -1;
-  // } else if (ret == -1) {
-  //   fprintf(stderr, "nochangelist_del_epoll: failed to delete event\n");
-  //   return -1;
-  // }
+  if (ret == -1 && errno == EBADF) {
+    return -1;
+  } else if (ret == -1) {
+    fprintf(stderr, "nochangelist_del_epoll: failed to delete event\n");
+    return -1;
+  }
 
   return 0;
 }
@@ -188,7 +222,8 @@ demievent_dispatch(struct event_base *base, struct timeval *tv)
 {
   int res, ev, i;
   struct demieventop *evbase;
-  struct epoll_event events[20];
+  struct epoll_event events[MAX_EVENTS];
+  struct epoll_event demi_events[MAX_EVENTS];
   long timeout = -1;
 
   evbase = (struct demieventop *) base->evbase;
@@ -198,27 +233,47 @@ demievent_dispatch(struct event_base *base, struct timeval *tv)
     timeout = evutil_tv_to_msec_(tv);
   }
 
-  res = epoll_wait(evbase->epfd, events, 20, timeout);
+  // Dispatch demikernel events
+  if (evbase->n_demi_epoll > 0) {
+    res = epoll_wait(evbase->demi_epfd, demi_events, MAX_EVENTS, 0);
 
-  if (res == -1)
-    return -1;
+    for (i = 0; i < res; i++) {
+      if ((demi_events[i].events & EPOLLHUP) && 
+          !(demi_events[i].events & EPOLLRDHUP)) {
+        ev = EV_READ | EV_WRITE;
+      } else {
+        if (demi_events[i].events & EPOLLIN)
+          ev |= EV_READ;
+        if (demi_events[i].events & EPOLLOUT)
+          ev |= EV_WRITE;
+        if (demi_events[i].events & EPOLLRDHUP)
+          ev |= EV_CLOSED;
+      }
 
-  for (i = 0; i < res; i++)
-  {
-    if ((events[i].events & EPOLLHUP) && !(events[i].events & EPOLLRDHUP)) {
-      ev = EV_READ | EV_WRITE;
-    } else {
-      if (events[i].events & EPOLLIN)
-        ev |= EV_READ;
-      if (events[i].events & EPOLLOUT)
-        ev |= EV_WRITE;
-      if (events[i].events & EPOLLRDHUP)
-        ev |= EV_CLOSED;
+      evmap_io_active_(base, demi_events[i].data.fd, ev);
     }
-
-    evmap_io_active_(base, events[0].data.fd, ev);
   }
+  
+  // Dispatch regular epoll events
+  if (evbase->n_epoll > 0) {
+    res = evbase->libc_epoll_wait(evbase->epfd, events, MAX_EVENTS, 0);
 
+    for (i = 0; i < res; i++) {
+      if ((events[i].events & EPOLLHUP) && 
+          !(events[i].events & EPOLLRDHUP)) {
+        ev = EV_READ | EV_WRITE;
+      } else {
+        if (events[i].events & EPOLLIN)
+          ev |= EV_READ;
+        if (events[i].events & EPOLLOUT)
+          ev |= EV_WRITE;
+        if (events[i].events & EPOLLRDHUP)
+          ev |= EV_CLOSED;
+      }
+
+      evmap_io_active_(base, events[i].data.fd, ev);
+    }
+  }
 
   return 0;
 }
