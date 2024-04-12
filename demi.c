@@ -109,7 +109,6 @@ demievent_init(struct event_base *base)
   int epfd;
   struct demieventop *demiop;
   // char *const args[] = {(char *const) "", (char *const) "catnap"};
-  fprintf(stderr, "demievent_init\n");
 
   demiop = mm_calloc(1, sizeof(struct demieventop));
   if (!demiop) {
@@ -163,7 +162,6 @@ demievent_nochangelist_add(struct event_base *base, evutil_socket_t fd,
   struct epoll_event event;
   struct demieventop *evbase;
 
-  fprintf(stderr, "demievent_add: fd=%d\n", fd);
   evbase = (struct demieventop *) base->evbase;
 
   event.events = EPOLLIN;
@@ -197,7 +195,6 @@ demievent_nochangelist_del(struct event_base *base, evutil_socket_t fd,
 {
   int ret;
   struct demieventop *evbase;
-  fprintf(stderr, "demievent_del fd=%d\n", fd);
 
   evbase = (struct demieventop *) base->evbase;
 
@@ -235,7 +232,7 @@ demievent_dispatch(struct event_base *base, struct timeval *tv)
 
   // Dispatch demikernel events
   if (evbase->n_demi_epoll > 0) {
-    res = epoll_wait(evbase->demi_epfd, demi_events, MAX_EVENTS, 0);
+    res = epoll_wait(evbase->demi_epfd, demi_events, MAX_EVENTS, timeout);
 
     for (i = 0; i < res; i++) {
       if ((demi_events[i].events & EPOLLHUP) && 
@@ -282,7 +279,6 @@ static void
 demievent_dealloc(struct event_base *base)
 {
   struct demieventop *demiop = base->evbase;
-  fprintf(stderr, "demievent_dealloc\n");
 
   if (demiop != NULL) {
     memset(demiop, 0, sizeof(struct demieventop));
