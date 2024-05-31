@@ -303,7 +303,7 @@ int evutil_socket_connect_(evutil_socket_t *fd_ptr, const struct sockaddr *sa, i
 int evutil_socket_finished_connecting_(evutil_socket_t fd);
 
 EVENT2_EXPORT_SYMBOL
-int evutil_ersatz_socketpair_(int, int , int, evutil_socket_t[]);
+int evutil_ersatz_socketpair_(int, int , int, evutil_socket_t[2]);
 
 int evutil_resolve_(int family, const char *hostname, struct sockaddr *sa,
     ev_socklen_t *socklen, int port);

@@ -670,7 +670,7 @@ if test "x$ac_cv_header_demievent_h" = "xyes"; then
         #include <demi/libos.h>
       ]],[[
         int res;
-        char *const args[2] = {"", "catnap"};
+        char *const args[2] = {"", "libevent"};
         res = demi_init(2, (char **) argv);
         return res;
       ]])], 

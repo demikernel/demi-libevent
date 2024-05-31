@@ -1,6 +1,7 @@
 // NOTE: libc requires this for RTLD_NEXT.
 #define _GNU_SOURCE 1
 
+#include <unistd.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <demi/libos.h>
 #include <demi/wait.h>
 #include <demi/types.h>
+#include <pthread.h>
 
 #include <event2/util.h>
 #include <event2/event.h>
@@ -19,11 +21,10 @@
 #include "changelist-internal.h"
 
 #ifdef EVENT__HAVE_DEMIEVENT
-// #define _POSIX_C_SOURCE 200809L
 
 #define EVENT_BASE_FLAG_DEMIEVENT_USE_CHANGELIST 1
 #define QTOKEN_MAX 65535
-#define MAX_EVENTS 30
+#define MAX_EVENTS 16
 
 static void *
 demievent_init(struct event_base *base);
@@ -45,7 +46,7 @@ demievent_nochangelist_del(struct event_base *base, evutil_socket_t fd,
     short old, short events, void *fdinfo);
 
 // Dispatch
-static int 
+static int
 demievent_dispatch(struct event_base *base, struct timeval *);
 
 // Other
@@ -106,9 +107,11 @@ const struct eventop demieventops = {
 static void *
 demievent_init(struct event_base *base)
 {
-  int epfd;
+  int epfd, ret, argc;
   struct demieventop *demiop;
-  // char *const args[] = {(char *const) "", (char *const) "catnap"};
+
+  char *const args[] = {(char *const) "libevent"};
+  argc = 1;
 
   demiop = mm_calloc(1, sizeof(struct demieventop));
   if (!demiop) {
@@ -123,6 +126,7 @@ demievent_init(struct event_base *base)
   epfd = demiop->libc_epoll_create1(0);
   if (epfd == -1) {
     fprintf(stderr, "demievent_init: libc epoll_create failed\n");
+    free(demiop);
     return NULL;
   }
   demiop->epfd = epfd;
@@ -130,6 +134,7 @@ demievent_init(struct event_base *base)
   epfd = epoll_create1(0);
   if (epfd == -1) {
     fprintf(stderr, "demievent_init: demikernel epoll_create failed\n");
+    free(demiop);
     return NULL;
   }
   demiop->demi_epfd = epfd;
@@ -143,7 +148,13 @@ demievent_init(struct event_base *base)
   }
 
   base->evsel = &demieventops;
-  
+
+  ret = demi_init(argc, args);
+  if (ret != 0 && ret != EEXIST) {
+    free(demiop);
+    return NULL;
+  }
+
   return (demiop);
 }
 
@@ -207,7 +218,6 @@ demievent_nochangelist_del(struct event_base *base, evutil_socket_t fd,
   if (ret == -1 && errno == EBADF) {
     return -1;
   } else if (ret == -1) {
-    fprintf(stderr, "nochangelist_del_epoll: failed to delete event\n");
     return -1;
   }
 
@@ -235,7 +245,7 @@ demievent_dispatch(struct event_base *base, struct timeval *tv)
     res = epoll_wait(evbase->demi_epfd, demi_events, MAX_EVENTS, timeout);
 
     for (i = 0; i < res; i++) {
-      if ((demi_events[i].events & EPOLLHUP) && 
+      if ((demi_events[i].events & EPOLLHUP) &&
           !(demi_events[i].events & EPOLLRDHUP)) {
         ev = EV_READ | EV_WRITE;
       } else {
@@ -250,13 +260,14 @@ demievent_dispatch(struct event_base *base, struct timeval *tv)
       evmap_io_active_(base, demi_events[i].data.fd, ev);
     }
   }
-  
+
+
   // Dispatch regular epoll events
   if (evbase->n_epoll > 0) {
     res = evbase->libc_epoll_wait(evbase->epfd, events, MAX_EVENTS, 0);
 
     for (i = 0; i < res; i++) {
-      if ((events[i].events & EPOLLHUP) && 
+      if ((events[i].events & EPOLLHUP) &&
           !(events[i].events & EPOLLRDHUP)) {
         ev = EV_READ | EV_WRITE;
       } else {
