@@ -107,11 +107,8 @@ const struct eventop demieventops = {
 static void *
 demievent_init(struct event_base *base)
 {
-  int epfd, ret, argc;
+  int epfd;
   struct demieventop *demiop;
-
-  char *const args[] = {(char *const) "libevent"};
-  argc = 1;
 
   demiop = mm_calloc(1, sizeof(struct demieventop));
   if (!demiop) {
@@ -149,11 +146,11 @@ demievent_init(struct event_base *base)
 
   base->evsel = &demieventops;
 
-  ret = demi_init(argc, args);
-  if (ret != 0 && ret != EEXIST) {
-    free(demiop);
-    return NULL;
-  }
+  // ret = demi_init(argc, args);
+  // if (ret != 0 && ret != EEXIST) {
+  //   free(demiop);
+  //   return NULL;
+  // }
 
   return (demiop);
 }
